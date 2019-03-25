@@ -328,11 +328,11 @@ class BIMPM(nn.Module):
 
         # (batch, seq_len, l * 8)
         mv_p = torch.cat(
-            [mv_p_full_fw, mv_p_max_fw, mv_p_att_mean_fw, mv_p_att_max_fw,
-             mv_p_full_bw, mv_p_max_bw, mv_p_att_mean_bw, mv_p_att_max_bw], dim=2)
+            (mv_p_full_fw, mv_p_max_fw, mv_p_att_mean_fw, mv_p_att_max_fw,
+             mv_p_full_bw, mv_p_max_bw, mv_p_att_mean_bw, mv_p_att_max_bw), dim=2)
         mv_h = torch.cat(
-            [mv_h_full_fw, mv_h_max_fw, mv_h_att_mean_fw, mv_h_att_max_fw,
-             mv_h_full_bw, mv_h_max_bw, mv_h_att_mean_bw, mv_h_att_max_bw], dim=2)
+            (mv_h_full_fw, mv_h_max_fw, mv_h_att_mean_fw, mv_h_att_max_fw,
+             mv_h_full_bw, mv_h_max_bw, mv_h_att_mean_bw, mv_h_att_max_bw), dim=2)
 
         mv_p = self.dropout(mv_p)
         mv_h = self.dropout(mv_h)
@@ -344,8 +344,8 @@ class BIMPM(nn.Module):
 
         # 2 * (2, batch, hidden_size) -> 2 * (batch, hidden_size * 2) -> (batch, hidden_size * 4)
         x = torch.cat(
-            [agg_p_last.permute(1, 0, 2).contiguous().view(-1, self.args.hidden_size * 2),
-             agg_h_last.permute(1, 0, 2).contiguous().view(-1, self.args.hidden_size * 2)], dim=1)
+            (agg_p_last.permute(1, 0, 2).contiguous().view(-1, self.args.hidden_size * 2),
+             agg_h_last.permute(1, 0, 2).contiguous().view(-1, self.args.hidden_size * 2)), dim=1)
         x = self.dropout(x)
 
         # ----- Prediction Layer -----

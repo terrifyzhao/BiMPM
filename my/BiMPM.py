@@ -49,6 +49,28 @@ class BiMPM(nn.Module):
         self.linear2 = nn.Linear(args.context_hidden_size * 4, args.class_size)
 
     def forward(self, **kwargs):
+
+        def matching_func_full(v1, v2, w):
+            # 转置，添加维度
+            w = torch.transpose(w, 1, 0).unsqueeze(0).unsqueeze(0)
+            # 把v1在dim维度上扩充args.num_perspective倍
+            v1 = w * torch.stack([v1] * args.num_perspective, dim=3)
+            if len(v2.size()) == 3:
+                v2 = w * torch.stack([v2] * args.num_perspective, dim=3)
+            else:
+                v2 = w * torch.stack([torch.stack([v2] * v1.size(1), dim=1)] * args.num_perspective, dim=3)
+
+            m = F.cosine_similarity(v1, v2, dim=2)
+            return m
+
+        def matching_func_maxpool(v1, v2, w):
+            w = w.unsqueeze(0).unsqueeze(2)
+            v1, v2 = w * torch.stack([v1] * args.num_perspective, dim=1), \
+                     w * torch.stack([v2] * args.num_perspective, dim=1)
+
+            v1_norm = v1.norm(p=2, dim=3, keepdim=True)
+            v2_norm = v2.norm(p=2, dim=3, keepdim=True)
+
         # ----- Word Representation Layer -----
         # (batch, seq_len, max_word_len)
         seq_len_p = kwargs['p_char'].size(1)
@@ -85,4 +107,14 @@ class BiMPM(nn.Module):
         p = self.dropout(p)
         h = self.dropout(h)
 
+        # (batch, seq_len, hidden_size)
+        p_fw, p_bw = torch.split(p, args.context_hidden_size, dim=-1)
+        h_fw, h_bw = torch.split(h, args.context_hidden_size, dim=-1)
+
         # ----- Matching Layer -----
+        # 1、Full-Matching 所有时刻的context和另一个序列的序列context计算相似度
+        # (batch, seq_len, 1)
+        p_full_fw = matching_func_full(p_fw, h_fw[:, -1, :], self.mp_w1)
+        p_full_bw = matching_func_full(p_bw, h_bw[:, 0, :], self.mp_w2)
+        h_full_fw = matching_func_full(h_bw, p_bw[:, -1, :], self.mp_w2)
+        h_full_bw = matching_func_full(h_bw, p_bw[:, 0, :], self.mp_w2)
