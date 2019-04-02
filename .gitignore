@@ -1,6 +1,3 @@
-/chinese_L-12_H-768_A-12
-tmp/
 __pycache__/
 .idea/
-data/data_merger.py
-data/data.py
+.DS_Store

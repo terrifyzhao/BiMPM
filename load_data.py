@@ -1,10 +1,6 @@
-import torch.nn as nn
-import torch
-from my import model_constant
 import os
 import pandas as pd
-import jieba
-from my import args
+import args
 import numpy as np
 
 
