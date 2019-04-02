@@ -23,7 +23,10 @@ import numpy as np
 # c = torch.stack([a]*3, dim=1)
 # print(c)
 
-a = torch.rand(2, 3, 3)
-print(a)
-print(a[:, 0, :])
-print(a[:, -1, :])
+# a = torch.rand(2, 3, 3)
+# print(a)
+# print(a[:, 0, :])
+# print(a[:, -1, :])
+import numpy as np
+
+
