@@ -3,7 +3,7 @@ import sys
 path = os.getcwd()
 sys.path.append(path)
 
-from BiMPM import BiMPM
+from BiMPM_torch import BiMPM
 import load_data as load
 import torch.nn as nn
 import torch
@@ -11,8 +11,8 @@ import numpy as np
 import torch.utils.data as Data
 import args
 
-p, h, label = load.load_data('input/dev.csv')
-# p, h, label = load.load_fake_data()
+# p, h, label = load.load_data('input/dev.csv')
+p, h, label = load.load_fake_data()
 data = {}
 data1 = torch.from_numpy(np.array(p))
 data2 = torch.from_numpy(np.array(h))
@@ -40,7 +40,7 @@ for i in range(10):
         data = {}
         data['p_char'] = data1
         data['h_char'] = data2
-        output = model(**data.cuda())
+        output = model(**data)
         loss = loss_func(output, label.cuda())
 
         prediction = torch.max(output, 1)[1]

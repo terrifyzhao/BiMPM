@@ -1,215 +1,171 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import tensorflow as tf
 import args
+import load_data
 
 
-class BiMPM(nn.Module):
-    def __init__(self, word_embedding=0):
-        super(BiMPM, self).__init__()
+class Graph:
+    def __init__(self):
+        self.p = tf.placeholder(name='p', shape=(args.batch_size, args.max_char_len), dtype=tf.int32)
+        self.h = tf.placeholder(name='h', shape=(args.batch_size, args.max_char_len), dtype=tf.int32)
+        self.y = tf.placeholder(name='y', shape=(args.batch_size,), dtype=tf.int32)
 
-        # ----- Word Representation Layer -----
-        self.char_embedding = nn.Embedding(args.char_vocab_len, args.char_embedding_len)
+        self.embed = tf.get_variable(name='embed', shape=(args.char_vocab_len, args.char_embedding_len),
+                                     dtype=tf.float32)
 
-        # self.word_embedding = nn.Embedding(args.word_vocab_size, args.word_embedding_len)
-        # self.word_embedding.weiht.data.copy_(word_embedding)
-        # self.word_embedding.weight.requires = False
+        # self.w1 = tf.get_variable(name='w1', shape=(args.batch_size, args.char_hidden_size, args.max_char_len),
+        #                           dtype=tf.float32)
+        # self.w2 = tf.get_variable(name='w2', shape=(args.batch_size, args.char_hidden_size, args.max_char_len),
+        #                           dtype=tf.float32)
 
-        self.char_LSTM = nn.LSTM(
-            input_size=args.char_embedding_len,
-            hidden_size=args.char_hidden_size,
-            num_layers=1,
-            bidirectional=False,
-            batch_first=True
-        )
-
-        # ----- Context Representation Layer -----
-        self.context_LSTM = nn.LSTM(
-            input_size=args.char_hidden_size,
-            hidden_size=args.context_hidden_size,
-            num_layers=1,
-            bidirectional=True,
-            batch_first=True
-        )
-
-        # ----- Matching Layer -----
         for i in range(1, 9):
-            setattr(self, f'mp_w{i}', nn.Parameter(torch.rand(args.num_perspective, args.context_hidden_size)))
+            setattr(self, f'w{i}', tf.get_variable(name=f'w{i}', shape=(args.num_perspective, args.char_hidden_size),
+                                                   dtype=tf.float32))
 
-        # ----- Aggregation Layer -----
-        self.aggregation_LSTM = nn.LSTM(
-            input_size=32,
-            hidden_size=args.agg_hidden_size,
-            num_layers=1,
-            bidirectional=True,
-            batch_first=True
-        )
+        self.forward()
+        self.train()
 
-        # ----- Prediction Layer -----
-        self.pred_fc1 = nn.Linear(args.agg_hidden_size * 4, args.agg_hidden_size * 2)
-        self.pred_fc2 = nn.Linear(args.agg_hidden_size * 2, args.class_size)
+    def BiLSTM(self, x):
+        fw_cell = tf.nn.rnn_cell.BasicLSTMCell(args.char_hidden_size)
+        bw_cell = tf.nn.rnn_cell.BasicLSTMCell(args.char_hidden_size)
 
-    def forward(self, **kwargs):
+        return tf.nn.bidirectional_dynamic_rnn(fw_cell, bw_cell, x, dtype=tf.float32)
 
-        def matching_func_full(v1, v2, w):
-            # 转置，添加维度
-            w = torch.transpose(w, 1, 0).unsqueeze(0).unsqueeze(0)
-            # 把v1在dim维度上扩充args.num_perspective倍
-            v1 = w * torch.stack([v1] * args.num_perspective, dim=3)
-            if len(v2.size()) == 3:
-                v2 = w * torch.stack([v2] * args.num_perspective, dim=3)
-            else:
-                v2 = w * torch.stack([torch.stack([v2] * v1.size(1), dim=1)] * args.num_perspective, dim=3)
+    def LSTM(self, x):
+        cell = tf.nn.rnn_cell.BasicLSTMCell(args.char_hidden_size)
+        return tf.nn.dynamic_rnn(cell, x, dtype=tf.float32)
 
-            m = F.cosine_similarity(v1, v2, dim=2)
-            return m
+    def cosine(self, v1, v2):
+        v1_norm = tf.sqrt(tf.reduce_sum(tf.square(v1), axis=2))
+        v2_norm = tf.sqrt(tf.reduce_sum(tf.square(v2), axis=2))
 
-        def div_with_small_value(n, d, eps=1e-8):
-            # too small values are replaced by 1e-8 to prevent it from exploding.
-            d = d * (d > eps).float() + eps * (d <= eps).float()
-            return n / d
+        cosine = tf.reduce_sum(tf.multiply(v1, v2), axis=2) / (v1_norm * v2_norm)
+        return cosine
 
-        def matching_func_maxpool(v1, v2, w):
-            w = w.unsqueeze(0).unsqueeze(2)
-            v1, v2 = w * torch.stack([v1] * args.num_perspective, dim=1), \
-                     w * torch.stack([v2] * args.num_perspective, dim=1)
+    def full_matching(self, metric, vec, w):
+        w = tf.expand_dims(tf.expand_dims(tf.transpose(w), 0), 0)
+        metric = w * tf.stack([metric] * args.num_perspective, axis=3)
+        # vec = w * tf.stack([tf.stack([vec] * metric.shape[1], axis=1)] * args.num_perspective, axis=3)
+        vec = w * tf.stack([vec] * args.num_perspective, axis=3)
+        cosine = self.cosine(metric, vec)
+        return cosine
 
-            v1_norm = v1.norm(p=2, dim=3, keepdim=True)
-            v2_norm = v2.norm(p=2, dim=3, keepdim=True)
+    def maxpool_full_matching(self, v1, v2, w):
+        w = tf.expand_dims(tf.expand_dims(tf.transpose(w), 0), 0)
+        v1 = w * tf.stack([v1] * args.num_perspective, axis=3)
+        v2 = w * tf.stack([v2] * args.num_perspective, axis=3)
+        cosine = self.cosine(v1, v2)
+        max_value = tf.reduce_max(cosine, axis=1)
+        return max_value
 
-            n = torch.matmul(v1, v2.transpose(2, 3))
-            d = v1_norm * v2_norm.transpose(2, 3)
-
-            m = div_with_small_value(n, d).permute(0, 2, 3, 1)
-
-            return m
-
-        def attention(v1, v2):
-            v1_norm = v1.norm(p=2, dim=2, keepdim=True)
-            v2_norm = v2.norm(p=2, dim=2, keepdim=True).permute(0, 2, 1)
-
-            a = torch.bmm(v1, v2.permute(0, 2, 1))
-            d = v1_norm * v2_norm
-
-            return div_with_small_value(a, d)
-
+    def forward(self):
         # ----- Word Representation Layer -----
-        # (batch, seq_len, max_word_len)
-        seq_len_p = kwargs['p_char'].size(1)
-        seq_len_h = kwargs['h_char'].size(1)
+        # 字嵌入
+        p_embedding = tf.nn.embedding_lookup(self.embed, self.p)
+        h_embedding = tf.nn.embedding_lookup(self.embed, self.h)
 
-        # (batch, max_char_len, vocab_size) -> (batch*max_char_len, vocab_size)
-        char_p = kwargs['p_char'].view(-1, args.max_char_len)
-        char_h = kwargs['h_char'].view(-1, args.max_char_len)
+        # 过一遍LSTM后作为字向量
+        with tf.variable_scope("lstm_p", reuse=None):
+            p_output, _ = self.LSTM(p_embedding)
+        with tf.variable_scope("lstm_h", reuse=None):
+            h_output, _ = self.LSTM(h_embedding)
 
-        # (batch*max_char_len, vocab_size) -> (batch*max_char_len, vocab_size, char_embedding_len)
-        # (batch*max_char_len, char_embedding_len) -> (batch, max_char_len, char_hidden_size)
-        _, (char_p_embedding, _) = self.char_LSTM(self.char_embedding(char_p))
-        _, (char_h_embedding, _) = self.char_LSTM(self.char_embedding(char_h))
-
-        # (1, batch*seq_len, char_hidden_size) -> (batch, seq_len, char_hidden_size)
-        char_p_embedding = char_p_embedding.view(args.batch_size, -1, args.char_hidden_size)
-        char_h_embedding = char_h_embedding.view(args.batch_size, -1, args.char_hidden_size)
-
-        # (batch, seq_len) -> (batch. seq_len, word_dim)
-        # word_p_embedding = self.word_embedding(kwargs['p_word'])
-        # word_h_embedding = self.word_embedding(kwargs['h_word'])
-
-        # (batch, seq_len, word_dim) -> (batch, seq_len, word_dim + char_hidden_size)
-        # p = torch.cat((word_p_embedding, char_p_embedding), dim=-1)
-        # h = torch.cat((word_h_embedding, char_h_embedding), dim=-1)
-        # p = torch.cat((char_p_embedding, char_p_embedding), dim=-1)
-        # h = torch.cat((char_h_embedding, char_h_embedding), dim=-1)
-
-        p = F.dropout(char_p_embedding, p=args.drop_out)
-        h = F.dropout(char_h_embedding, p=args.drop_out)
+        char_p_embedding = p_output[:, -1, :]
+        char_h_embedding = h_output[:, -1, :]
 
         # ----- Context Representation Layer -----
-        # (batch, seq_len, word_dim + char_hidden_size) -> (batch, seq_len, context_hidden_size)
-        p = self.context_LSTM(p)
-        h = self.context_LSTM(h)
-        p = self.dropout(p[0])
-        h = self.dropout(h[0])
+        # 论文中是取context，tf不会输出所有时刻的ctx，这里用输出值代替
+        with tf.variable_scope("bilstm_p", reuse=None):
+            (p_fw, p_bw), _ = self.BiLSTM(char_p_embedding)
+        with tf.variable_scope("bilstm_h", reuse=None):
+            (h_fw, h_bw), _ = self.BiLSTM(char_h_embedding)
 
-        # (batch, seq_len, hidden_size)
-        p_fw, p_bw = torch.split(p, args.context_hidden_size, dim=-1)
-        h_fw, h_bw = torch.split(h, args.context_hidden_size, dim=-1)
+        p_fw = tf.nn.dropout(p_fw, args.drop_out)
+        p_bw = tf.nn.dropout(p_bw, args.drop_out)
+        h_fw = tf.nn.dropout(h_fw, args.drop_out)
+        h_bw = tf.nn.dropout(h_bw, args.drop_out)
 
         # ----- Matching Layer -----
-        # 1、Full-Matching 所有时刻的context和另一个序列的序列context计算相似度
-        # (batch, seq_len, 1)
-        p_full_fw = matching_func_full(p_fw, h_fw[:, -1, :], self.mp_w1)
-        p_full_bw = matching_func_full(p_bw, h_bw[:, 0, :], self.mp_w2)
-        h_full_fw = matching_func_full(h_bw, p_bw[:, -1, :], self.mp_w2)
-        h_full_bw = matching_func_full(h_bw, p_bw[:, 0, :], self.mp_w2)
+        p_full_fw = self.full_matching(p_fw, tf.expand_dims(h_fw[:, -1, :], 1), self.w1)
+        p_full_bw = self.full_matching(p_bw, tf.expand_dims(h_bw[:, 0, :], 1), self.w2)
+        h_full_fw = self.full_matching(h_fw, tf.expand_dims(p_fw[:, -1, :], 1), self.w1)
+        h_full_bw = self.full_matching(h_bw, tf.expand_dims(p_bw[:, 0, :], 1), self.w2)
 
         # 2、Maxpooling-Matching
-        max_fw = matching_func_maxpool(p_fw, h_fw, self.mp_w3)
-        max_bw = matching_func_maxpool(p_bw, h_bw, self.mp_w4)
+        max_fw = self.maxpool_full_matching(p_fw, h_fw, self.w3)
+        max_bw = self.maxpool_full_matching(p_bw, h_bw, self.w4)
 
-        p_max_fw = max_fw.max(dim=2)
-        p_max_bw = max_bw.max(dim=2)
-        h_max_fw = max_fw.max(dim=1)
-        h_max_bw = max_bw.max(dim=1)
+        # max_fw = tf.reduce_max(max_fw, axis=2)
+        # max_bw = tf.reduce_max(max_bw, axis=2)
+        # h_max_fw = tf.reduce_max(max_fw, axis=1)
+        # h_max_bw = tf.reduce_max(max_bw, axis=1)
 
         # 3、Attentive-Matching
-        att_fw = attention(p_fw, h_fw)
-        att_bw = attention(p_bw, h_bw)
+        att_fw = self.cosine(p_fw, h_fw)
+        att_bw = self.cosine(p_bw, h_bw)
 
-        # unsqueeze增加维度
-        att_h_fw = h_fw.unsqueeze(1) * att_fw.unsqueeze(3)
-        att_h_bw = h_bw.unsqueeze(1) * att_bw.unsqueeze(3)
+        att_h_fw = h_fw * tf.expand_dims(att_fw, 2)
+        att_h_bw = h_bw * tf.expand_dims(att_bw, 2)
+        att_p_fw = p_fw * tf.expand_dims(att_fw, 2)
+        att_p_bw = p_bw * tf.expand_dims(att_bw, 2)
 
-        att_p_fw = p_fw.unsqueeze(1) * att_fw.unsqueeze(3)
-        att_p_bw = p_bw.unsqueeze(1) * att_bw.unsqueeze(3)
+        att_mean_h_fw = self.cosine(att_h_fw, tf.expand_dims(att_fw, axis=2))
+        att_mean_h_bw = self.cosine(att_h_bw, tf.expand_dims(att_bw, axis=2))
+        att_mean_p_fw = self.cosine(att_p_fw, tf.expand_dims(att_fw, axis=2))
+        att_mean_p_bw = self.cosine(att_p_bw, tf.expand_dims(att_bw, axis=2))
 
-        att_mean_h_fw = div_with_small_value(att_h_fw.sum(dim=2), att_fw.sum(dim=2, keepdim=True))
-        att_mean_h_bw = div_with_small_value(att_h_bw.sum(dim=2), att_bw.sum(dim=2, keepdim=True))
-
-        att_mean_p_fw = div_with_small_value(att_p_fw.sum(dim=2), att_fw.sum(dim=2, keepdim=True))
-        att_mean_p_bw = div_with_small_value(att_p_bw.sum(dim=2), att_bw.sum(dim=2, keepdim=True))
-
-        p_att_mean_fw = matching_func_full(p_fw, att_mean_h_fw, self.mp_w5)
-        p_att_mean_bw = matching_func_full(p_bw, att_mean_h_bw, self.mp_w6)
-        h_att_mean_fw = matching_func_full(h_fw, att_mean_p_fw, self.mp_w5)
-        h_att_mean_bw = matching_func_full(h_bw, att_mean_p_bw, self.mp_w6)
+        p_att_mean_fw = self.maxpool_full_matching(p_fw, tf.expand_dims(att_mean_h_fw, axis=2), self.w5)
+        p_att_mean_bw = self.maxpool_full_matching(p_bw, tf.expand_dims(att_mean_h_bw, axis=2), self.w6)
+        h_att_mean_fw = self.maxpool_full_matching(h_fw, tf.expand_dims(att_mean_p_fw, axis=2), self.w5)
+        h_att_mean_bw = self.maxpool_full_matching(h_bw, tf.expand_dims(att_mean_p_bw, axis=2), self.w6)
 
         # 4、Max-Attentive-Matching
-        att_max_h_fw, _ = att_h_fw.max(dim=2)
-        att_max_h_bw, _ = att_h_bw.max(dim=2)
-        att_max_p_fw, _ = att_p_fw.max(dim=2)
-        att_max_p_bw, _ = att_p_bw.max(dim=2)
+        att_max_h_fw = tf.reduce_max(att_h_fw, axis=2)
+        att_max_h_bw = tf.reduce_max(att_h_bw, axis=2)
+        att_max_p_fw = tf.reduce_max(att_p_fw, axis=2)
+        att_max_p_bw = tf.reduce_max(att_p_bw, axis=2)
 
-        p_att_max_fw = matching_func_full(p_fw, att_max_h_fw, self.mp_w7)
-        p_att_max_bw = matching_func_full(p_bw, att_max_h_bw, self.mp_w8)
-        h_att_max_fw = matching_func_full(h_fw, att_max_p_fw, self.mp_w7)
-        h_att_max_bw = matching_func_full(h_bw, att_max_p_bw, self.mp_w8)
+        p_att_max_fw = self.maxpool_full_matching(p_fw, tf.expand_dims(att_max_h_fw, axis=2), self.w7)
+        p_att_max_bw = self.maxpool_full_matching(p_bw, tf.expand_dims(att_max_h_bw, axis=2), self.w8)
+        h_att_max_fw = self.maxpool_full_matching(h_fw, tf.expand_dims(att_max_p_fw, axis=2), self.w7)
+        h_att_max_bw = self.maxpool_full_matching(h_bw, tf.expand_dims(att_max_p_bw, axis=2), self.w8)
 
-        mv_p = torch.cat(
-            (p_full_fw, p_max_fw[0], p_att_mean_fw, p_att_max_fw,
-             p_full_bw, p_max_bw[0], p_att_mean_bw, p_att_max_bw), dim=2)
-        mv_h = torch.cat(
-            (h_full_fw, h_max_fw[0], h_att_mean_fw, h_att_max_fw,
-             h_full_bw, h_max_bw[0], h_att_mean_bw, h_att_max_bw), dim=2)
+        mv_p = tf.concat(
+            (p_full_fw, max_fw, p_att_mean_fw, p_att_max_fw,
+             p_full_bw, max_bw, p_att_mean_bw, p_att_max_bw), axis=2)
 
-        mv_p = self.dropout(mv_p)
-        mv_h = self.dropout(mv_h)
+        mv_h = tf.concat(
+            (h_full_fw, max_fw, h_att_mean_fw, h_att_max_fw,
+             h_full_bw, max_bw, h_att_mean_bw, h_att_max_bw), axis=2)
+
+        mv_p = tf.nn.dropout(mv_p, args.drop_out)
+        mv_h = tf.nn.dropout(mv_h, args.drop_out)
 
         # ----- Aggregation Layer -----
-        _, (agg_p_last, _) = self.aggregation_LSTM(mv_p)
-        _, (agg_h_last, _) = self.aggregation_LSTM(mv_h)
+        _, (agg_p_last, _) = self.BiLSTM(mv_p)
+        _, (agg_h_last, _) = self.BiLSTM(mv_h)
 
-        x = torch.cat(
+        x = tf.concat(
             (agg_p_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2),
-             agg_h_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2)), dim=1)
-        x = self.dropout(x)
+             agg_h_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2)), axis=1)
+        x = tf.nn.dropout(x)
 
         # ----- Prediction Layer -----
-        x = self.pred_fc1(x)
-        x = self.dropout(x)
-        x = self.pred_fc2(x)
+        x = tf.layers.dense(x, 512)
+        x = tf.nn.dropout(x)
+        self.logits = tf.layers.dense(x, 128)
 
-        return x
+    def train(self):
+        y = tf.one_hot(self.y, args.char_vocab_len)
+        self.loss = tf.nn.softmax_cross_entropy_with_logits(labels=y, logits=self.logits)
+        self.train_op = tf.train.AdamOptimizer().minimize(self.loss)
 
-    def dropout(self, v):
-        return F.dropout(v, p=args.drop_out, training=self.training)
+
+if __name__ == '__main__':
+    p, h, y = load_data.load_fake_data()
+    model = Graph()
+    with tf.Session()as sess:
+        sess.run(tf.global_variables_initializer())
+        for i in range(10):
+            loss, _, _ = sess.run([model.loss, model.logits, model.train_op],
+                                  feed_dict={model.p: p, model.h: h, model.y: y})
+            print('loss:', loss)

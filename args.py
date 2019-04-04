@@ -12,8 +12,9 @@ class_size = 2
 max_char_len = 10
 max_word_len = 10
 
-batch_size = 1000
+batch_size = 10
 
-char_vocab_len = 1692
+# char_vocab_len = 1692
+char_vocab_len = 10
 
 drop_out = 0.2
