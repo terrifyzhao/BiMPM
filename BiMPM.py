@@ -85,6 +85,7 @@ class Graph:
         h_bw = tf.nn.dropout(h_bw, args.drop_out)
 
         # ----- Matching Layer -----
+        # 1、Full-Matching
         p_full_fw = self.full_matching(p_fw, tf.expand_dims(h_fw[:, -1, :], 1), self.w1)
         p_full_bw = self.full_matching(p_bw, tf.expand_dims(h_bw[:, 0, :], 1), self.w2)
         h_full_fw = self.full_matching(h_fw, tf.expand_dims(p_fw[:, -1, :], 1), self.w1)
@@ -130,29 +131,38 @@ class Graph:
         h_att_max_bw = self.maxpool_full_matching(h_bw, tf.expand_dims(att_max_p_bw, axis=2), self.w8)
 
         mv_p = tf.concat(
-            (p_full_fw, max_fw, p_att_mean_fw, p_att_max_fw,
-             p_full_bw, max_bw, p_att_mean_bw, p_att_max_bw), axis=2)
+            (p_full_fw, tf.expand_dims(max_fw, 1), tf.expand_dims(p_att_mean_fw, 1), tf.expand_dims(p_att_max_fw, 1),
+             p_full_bw, tf.expand_dims(max_bw, 1), tf.expand_dims(p_att_mean_bw, 1), tf.expand_dims(p_att_max_bw, 1)),
+            axis=1)
 
         mv_h = tf.concat(
-            (h_full_fw, max_fw, h_att_mean_fw, h_att_max_fw,
-             h_full_bw, max_bw, h_att_mean_bw, h_att_max_bw), axis=2)
+            (h_full_fw, tf.expand_dims(max_fw, 1), tf.expand_dims(h_att_mean_fw, 1), tf.expand_dims(h_att_max_fw, 1),
+             h_full_bw, tf.expand_dims(max_bw, 1), tf.expand_dims(h_att_mean_bw, 1), tf.expand_dims(h_att_max_bw, 1)),
+            axis=1)
 
         mv_p = tf.nn.dropout(mv_p, args.drop_out)
         mv_h = tf.nn.dropout(mv_h, args.drop_out)
 
         # ----- Aggregation Layer -----
-        _, (agg_p_last, _) = self.BiLSTM(mv_p)
-        _, (agg_h_last, _) = self.BiLSTM(mv_h)
+        with tf.variable_scope("bilstm_agg_p", reuse=tf.AUTO_REUSE):
+            (p_f_last, p_b_last), _ = self.BiLSTM(mv_p)
+        with tf.variable_scope("bilstm_agg_h", reuse=tf.AUTO_REUSE):
+            (h_f_last, h_b_last), _ = self.BiLSTM(mv_h)
 
-        x = tf.concat(
-            (agg_p_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2),
-             agg_h_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2)), axis=1)
-        x = tf.nn.dropout(x)
+        # x = tf.concat(
+        #     (agg_p_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2),
+        #      agg_h_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2)), axis=1)
+        x = tf.concat((p_f_last, p_b_last, h_f_last, h_b_last), axis=1)
+        x = tf.reshape(x, shape=[1000, -1])
+        x = tf.nn.dropout(x, args.drop_out)
 
         # ----- Prediction Layer -----
-        x = tf.layers.dense(x, 512)
-        x = tf.nn.dropout(x)
-        self.logits = tf.layers.dense(x, 128)
+        x = tf.layers.dense(x, 4096)
+        x = tf.nn.dropout(x, args.drop_out)
+        x = tf.layers.dense(x, 2048)
+        # x = tf.layers.dense(x, 512)
+        x = tf.nn.dropout(x, args.drop_out)
+        self.logits = tf.layers.dense(x, 1692)
 
     def train(self):
         y = tf.one_hot(self.y, args.char_vocab_len)
