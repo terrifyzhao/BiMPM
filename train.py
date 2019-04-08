@@ -11,12 +11,17 @@ import numpy as np
 import torch.utils.data as Data
 import args
 
-# p, h, label = load.load_data('input/dev.csv')
-p, h, label = load.load_fake_data()
+p, h, label = load.load_data('input/train.csv')
+# p, h, label = load.load_fake_data()
 data = {}
 data1 = torch.from_numpy(np.array(p))
 data2 = torch.from_numpy(np.array(h))
 label = torch.from_numpy(np.array(label))
+
+if torch.cuda.is_available():
+    data1 = data1.cuda()
+    data2 = data2.cuda()
+    label = label.cuda()
 
 torch_dataset = Data.TensorDataset(data1, data2, label)
 loader = Data.DataLoader(
@@ -35,16 +40,18 @@ loss_func = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.002)
 
 for i in range(10):
-    print()
     for step, (data1, data2, label) in enumerate(loader):
         data = {}
         data['p_char'] = data1
         data['h_char'] = data2
         output = model(**data)
-        loss = loss_func(output, label.cuda())
+        loss = loss_func(output, label)
 
         prediction = torch.max(output, 1)[1]
-        pred_y = prediction.data.numpy()
+        if torch.cuda.is_available():
+            pred_y = prediction.data.cpu().numpy()
+        else:
+            pred_y = prediction.data.numpy()
         target_y = label.data.numpy()
         acc = float((pred_y == target_y).astype(int).sum()) / float(target_y.size)
         print(f'epoch:{i} step:{step} loss:{loss.data} acc:{acc}')

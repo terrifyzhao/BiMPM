@@ -69,15 +69,15 @@ class Graph:
         with tf.variable_scope("lstm_h", reuse=None):
             h_output, _ = self.LSTM(h_embedding)
 
-        char_p_embedding = p_output[:, -1, :]
-        char_h_embedding = h_output[:, -1, :]
+        # char_p_embedding = tf.expand_dims(p_output[:, -1, :], 1)
+        # char_h_embedding = tf.expand_dims(h_output[:, -1, :], 1)
 
         # ----- Context Representation Layer -----
         # 论文中是取context，tf不会输出所有时刻的ctx，这里用输出值代替
-        with tf.variable_scope("bilstm_p", reuse=None):
-            (p_fw, p_bw), _ = self.BiLSTM(char_p_embedding)
-        with tf.variable_scope("bilstm_h", reuse=None):
-            (h_fw, h_bw), _ = self.BiLSTM(char_h_embedding)
+        with tf.variable_scope("bilstm_p", reuse=tf.AUTO_REUSE):
+            (p_fw, p_bw), _ = self.BiLSTM(p_output)
+        with tf.variable_scope("bilstm_h", reuse=tf.AUTO_REUSE):
+            (h_fw, h_bw), _ = self.BiLSTM(h_output)
 
         p_fw = tf.nn.dropout(p_fw, args.drop_out)
         p_bw = tf.nn.dropout(p_bw, args.drop_out)

@@ -38,7 +38,7 @@ class BiMPM(nn.Module):
 
         # ----- Aggregation Layer -----
         self.aggregation_LSTM = nn.LSTM(
-            input_size=32,
+            input_size=8 * args.num_perspective,
             hidden_size=args.agg_hidden_size,
             num_layers=1,
             bidirectional=True,
