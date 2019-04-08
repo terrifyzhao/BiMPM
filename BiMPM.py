@@ -168,6 +168,9 @@ class Graph:
         y = tf.one_hot(self.y, args.char_vocab_len)
         self.loss = tf.nn.softmax_cross_entropy_with_logits(labels=y, logits=self.logits)
         self.train_op = tf.train.AdamOptimizer().minimize(self.loss)
+        self.predict = tf.argmax(self.logits, axis=1, name="predictions")
+        correct_prediction = tf.equal(tf.cast(self.predict, tf.int32), y)
+        self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32), name="Accuracy")
 
 
 if __name__ == '__main__':
@@ -176,6 +179,6 @@ if __name__ == '__main__':
     with tf.Session()as sess:
         sess.run(tf.global_variables_initializer())
         for i in range(10):
-            loss, _, _ = sess.run([model.loss, model.logits, model.train_op],
-                                  feed_dict={model.p: p, model.h: h, model.y: y})
-            print('loss:', loss)
+            loss, _, predict, acc = sess.run([model.loss, model.train_op, model.predict, model.accuracy],
+                                             feed_dict={model.p: p, model.h: h, model.y: y})
+            print('epoch:', i, ' loss:', loss, ' acc:', acc)
