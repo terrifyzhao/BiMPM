@@ -18,10 +18,10 @@ data1 = torch.from_numpy(np.array(p))
 data2 = torch.from_numpy(np.array(h))
 label = torch.from_numpy(np.array(label))
 
-if torch.cuda.is_available():
-    data1 = data1.cuda()
-    data2 = data2.cuda()
-    label = label.cuda()
+# if torch.cuda.is_available():
+#     data1 = data1.cuda()
+#     data2 = data2.cuda()
+#     label = label.cuda()
 
 torch_dataset = Data.TensorDataset(data1, data2, label)
 loader = Data.DataLoader(
@@ -39,13 +39,13 @@ else:
 loss_func = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.002)
 
-for i in range(10):
+for i in range(5):
     for step, (data1, data2, label) in enumerate(loader):
         data = {}
-        data['p_char'] = data1
-        data['h_char'] = data2
+        data['p_char'] = data1.cuda()
+        data['h_char'] = data2.cuda()
         output = model(**data)
-        loss = loss_func(output, label)
+        loss = loss_func(output, label.cuda())
 
         prediction = torch.max(output, 1)[1]
         if torch.cuda.is_available():

@@ -1,6 +1,7 @@
 import tensorflow as tf
 import args
 import load_data
+import numpy as np
 
 
 class Graph:
@@ -11,6 +12,12 @@ class Graph:
 
         self.embed = tf.get_variable(name='embed', shape=(args.char_vocab_len, args.char_embedding_len),
                                      dtype=tf.float32)
+
+        self.p_vec = tf.placeholder(name='p_word', shape=(args.batch_size, args.max_word_len, args.word_embedding_len),
+                                    dtype=tf.float32)
+        self.h_vec = tf.placeholder(name='h_word', shape=(args.batch_size, args.max_word_len, args.word_embedding_len),
+                                    dtype=tf.float32)
+        # self.h_vec = tf.placeholder(initial_value=h_vec, trainable=False)
 
         # self.w1 = tf.get_variable(name='w1', shape=(args.batch_size, args.char_hidden_size, args.max_char_len),
         #                           dtype=tf.float32)
@@ -62,6 +69,9 @@ class Graph:
         # 字嵌入
         p_embedding = tf.nn.embedding_lookup(self.embed, self.p)
         h_embedding = tf.nn.embedding_lookup(self.embed, self.h)
+
+        p_embedding = tf.concat((p_embedding, self.p_vec), axis=1)
+        h_embedding = tf.concat((h_embedding, self.h_vec), axis=1)
 
         # 过一遍LSTM后作为字向量
         with tf.variable_scope("lstm_p", reuse=None):
@@ -153,32 +163,125 @@ class Graph:
         #     (agg_p_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2),
         #      agg_h_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2)), axis=1)
         x = tf.concat((p_f_last, p_b_last, h_f_last, h_b_last), axis=1)
-        x = tf.reshape(x, shape=[1000, -1])
+        x = tf.reshape(x, shape=[args.batch_size, -1])
         x = tf.nn.dropout(x, args.drop_out)
 
         # ----- Prediction Layer -----
-        x = tf.layers.dense(x, 4096)
+        x = tf.layers.dense(x, 4096, activation='relu')
         x = tf.nn.dropout(x, args.drop_out)
-        x = tf.layers.dense(x, 2048)
-        # x = tf.layers.dense(x, 512)
+        x = tf.layers.dense(x, 1024, activation='relu')
         x = tf.nn.dropout(x, args.drop_out)
-        self.logits = tf.layers.dense(x, 1692)
+        x = tf.layers.dense(x, 128)
+        self.logits = tf.layers.dense(x, args.class_size)
+        # x = tf.nn.sigmoid(x)
+        # self.logits = tf.nn.sigmoid(x)
+        # self.predict = tf.argmax(self.logits, axis=1, name="predictions")
 
     def train(self):
-        y = tf.one_hot(self.y, args.char_vocab_len)
-        self.loss = tf.nn.softmax_cross_entropy_with_logits(labels=y, logits=self.logits)
+        y = tf.one_hot(self.y, args.class_size)
+        # result = [i[1] for i in self.logits]
+        loss = tf.nn.softmax_cross_entropy_with_logits(labels=y, logits=self.logits)
+        # self.loss = -tf.reduce_mean(self.y * tf.log(self.logits))
+        self.loss = tf.reduce_sum(loss)
         self.train_op = tf.train.AdamOptimizer().minimize(self.loss)
         self.predict = tf.argmax(self.logits, axis=1, name="predictions")
-        correct_prediction = tf.equal(tf.cast(self.predict, tf.int32), y)
+        correct_prediction = tf.equal(tf.cast(self.predict, tf.int32), self.y)
         self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32), name="Accuracy")
 
 
-if __name__ == '__main__':
-    p, h, y = load_data.load_fake_data()
+def train():
+    p, h, p_vec, h_vec, y = load_data.load_data('input/train.csv')
+    p_vec = np.array(p_vec)
+    h_vec = np.array(h_vec)
+
+    p_placeholder = tf.placeholder(p.dtype, p.shape)
+    h_placeholder = tf.placeholder(h.dtype, h.shape)
+    p_vec_placeholder = tf.placeholder(p_vec.dtype, p_vec.shape)
+    h_vec_placeholder = tf.placeholder(h_vec.dtype, h_vec.shape)
+    y_placeholder = tf.placeholder(y.dtype, y.shape)
+
+    evl_p, evl_h, evl_p_vec, evl_h_vec, evl_y = load_data.load_data('input/dev.csv')
+    # dataset = tf.data.Dataset.from_tensor_slices((p, h, p_vec, h_vec, y))
+    dataset = tf.data.Dataset.from_tensor_slices((p_placeholder,
+                                                  h_placeholder,
+                                                  p_vec_placeholder,
+                                                  h_vec_placeholder,
+                                                  y_placeholder))
+    dataset = dataset.shuffle(10000).batch(args.batch_size).repeat(20)
+    # iterator = dataset.make_one_shot_iterator()
+    iterator = dataset.make_initializable_iterator()
+    # data_element =
+
     model = Graph()
     with tf.Session()as sess:
         sess.run(tf.global_variables_initializer())
-        for i in range(10):
-            loss, _, predict, acc = sess.run([model.loss, model.train_op, model.predict, model.accuracy],
-                                             feed_dict={model.p: p, model.h: h, model.y: y})
-            print('epoch:', i, ' loss:', loss, ' acc:', acc)
+        # tf.summary.FileWriter('log/', sess.graph)
+        for i in range(20):
+            batch = int(len(y) / args.batch_size)
+            for j in range(batch):
+                try:
+                    sess.run(iterator.initializer, feed_dict={
+                        p_placeholder: p,
+                        h_placeholder: h,
+                        p_vec_placeholder: p_vec,
+                        h_vec_placeholder: h_vec,
+                        y_placeholder: y
+                    })
+                    batch_p, batch_h, batch_p_vec, batch_h_vec, batch_y = sess.run(iterator.get_next())
+
+                    loss, _, predict, acc = sess.run([model.loss, model.train_op, model.predict, model.accuracy],
+                                                     feed_dict={model.p: batch_p,
+                                                                model.h: batch_h,
+                                                                model.p_vec: batch_p_vec,
+                                                                model.h_vec: batch_h_vec,
+                                                                model.y: batch_y})
+                    print('epoch:', i, ' batch:', j, ' loss:', loss / args.batch_size, ' acc:', acc)
+                except:
+                    # print(e)
+                    print('data done')
+
+            accs = []
+            for j in range(int(len(evl_y) / args.batch_size)):
+                batch_p = evl_p[args.batch_size * j:args.batch_size * (j + 1)]
+                batch_h = evl_h[args.batch_size * j:args.batch_size * (j + 1)]
+                batch_p_vec = p_vec[args.batch_size * j:args.batch_size * (j + 1)]
+                batch_h_vec = h_vec[args.batch_size * j:args.batch_size * (j + 1)]
+                batch_y = evl_y[args.batch_size * j:args.batch_size * (j + 1)]
+                predict, acc = sess.run([model.predict, model.accuracy],
+                                        feed_dict={model.p: batch_p,
+                                                   model.h: batch_h,
+                                                   model.p_vec: batch_p_vec,
+                                                   model.h_vec: batch_h_vec,
+                                                   model.y: batch_y})
+                accs.append(acc)
+
+            acc = np.mean(accs)
+            print('evl acc: ', acc)
+            print('save model')
+            saver = tf.train.Saver()
+            saver.save(sess, f'output/BiMPM_{i}.ckpt')
+            print('')
+
+
+def test(path):
+    model = Graph()
+    with tf.Session() as sess:
+        saver = tf.train.Saver()
+        saver.restore(sess, f'./output/{path}')
+        p, h, y = load_data.load_data('input/test.csv')
+        accs = []
+        for j in range(int(len(y) / args.batch_size)):
+            batch_p = p[args.batch_size * j:args.batch_size * (j + 1)]
+            batch_h = h[args.batch_size * j:args.batch_size * (j + 1)]
+            batch_y = y[args.batch_size * j:args.batch_size * (j + 1)]
+            predict, acc = sess.run([model.predict, model.accuracy],
+                                    feed_dict={model.p: batch_p, model.h: batch_h, model.y: batch_y})
+            accs.append(acc)
+        import numpy as np
+        acc = np.mean(accs)
+        print('acc: ', acc)
+
+
+if __name__ == '__main__':
+    train()
+    # test()
