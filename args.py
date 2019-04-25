@@ -9,12 +9,15 @@ agg_hidden_size = 128
 num_perspective = 10
 class_size = 2
 
-max_char_len = 10
-max_word_len = 8
+max_char_len = 15
+max_word_len = 15
 
-batch_size = 100
+batch_size = 128
 
 char_vocab_len = 1692
-# char_vocab_len = 10
 
-drop_out = 0.2
+learning_rate = 0.0002
+
+keep_prob = 0.7
+
+epochs = 10

@@ -21,7 +21,7 @@ h_seg = list(map(lambda x: list(jieba.cut(x)), h))
 common_texts.extend(p_seg)
 common_texts.extend(h_seg)
 
-df = pd.read_csv('input/test.csv')
+df = pd.read_csv('input/test_ccb.csv')
 p = df['sentence1'].values
 h = df['sentence2'].values
 p_seg = list(map(lambda x: list(jieba.cut(x)), p))

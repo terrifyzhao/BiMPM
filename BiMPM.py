@@ -1,28 +1,21 @@
 import tensorflow as tf
 import args
-import load_data
-import numpy as np
+import data_process
 
 
 class Graph:
     def __init__(self):
-        self.p = tf.placeholder(name='p', shape=(args.batch_size, args.max_char_len), dtype=tf.int32)
-        self.h = tf.placeholder(name='h', shape=(args.batch_size, args.max_char_len), dtype=tf.int32)
-        self.y = tf.placeholder(name='y', shape=(args.batch_size,), dtype=tf.int32)
+        self.p = tf.placeholder(name='p', shape=(None, args.max_char_len), dtype=tf.int32)
+        self.h = tf.placeholder(name='h', shape=(None, args.max_char_len), dtype=tf.int32)
+        self.p_vec = tf.placeholder(name='p_word', shape=(None, args.max_word_len, args.word_embedding_len),
+                                    dtype=tf.float32)
+        self.h_vec = tf.placeholder(name='h_word', shape=(None, args.max_word_len, args.word_embedding_len),
+                                    dtype=tf.float32)
+        self.y = tf.placeholder(name='y', shape=(None,), dtype=tf.int32)
+        self.keep_prob = tf.placeholder(name='keep_prob', dtype=tf.float32)
 
         self.embed = tf.get_variable(name='embed', shape=(args.char_vocab_len, args.char_embedding_len),
                                      dtype=tf.float32)
-
-        self.p_vec = tf.placeholder(name='p_word', shape=(args.batch_size, args.max_word_len, args.word_embedding_len),
-                                    dtype=tf.float32)
-        self.h_vec = tf.placeholder(name='h_word', shape=(args.batch_size, args.max_word_len, args.word_embedding_len),
-                                    dtype=tf.float32)
-        # self.h_vec = tf.placeholder(initial_value=h_vec, trainable=False)
-
-        # self.w1 = tf.get_variable(name='w1', shape=(args.batch_size, args.char_hidden_size, args.max_char_len),
-        #                           dtype=tf.float32)
-        # self.w2 = tf.get_variable(name='w2', shape=(args.batch_size, args.char_hidden_size, args.max_char_len),
-        #                           dtype=tf.float32)
 
         for i in range(1, 9):
             setattr(self, f'w{i}', tf.get_variable(name=f'w{i}', shape=(args.num_perspective, args.char_hidden_size),
@@ -32,67 +25,68 @@ class Graph:
         self.train()
 
     def BiLSTM(self, x):
-        fw_cell = tf.nn.rnn_cell.BasicLSTMCell(args.char_hidden_size)
-        bw_cell = tf.nn.rnn_cell.BasicLSTMCell(args.char_hidden_size)
+        fw_cell = tf.nn.rnn_cell.BasicLSTMCell(args.char_hidden_size, activation='tanh')
+        bw_cell = tf.nn.rnn_cell.BasicLSTMCell(args.char_hidden_size, activation='tanh')
 
         return tf.nn.bidirectional_dynamic_rnn(fw_cell, bw_cell, x, dtype=tf.float32)
 
     def LSTM(self, x):
-        cell = tf.nn.rnn_cell.BasicLSTMCell(args.char_hidden_size)
+        cell = tf.nn.rnn_cell.BasicLSTMCell(args.char_hidden_size, activation='tanh')
         return tf.nn.dynamic_rnn(cell, x, dtype=tf.float32)
 
-    def cosine(self, v1, v2):
-        v1_norm = tf.sqrt(tf.reduce_sum(tf.square(v1), axis=2))
-        v2_norm = tf.sqrt(tf.reduce_sum(tf.square(v2), axis=2))
-
-        cosine = tf.reduce_sum(tf.multiply(v1, v2), axis=2) / (v1_norm * v2_norm)
-        return cosine
-
     def full_matching(self, metric, vec, w):
-        w = tf.expand_dims(tf.expand_dims(tf.transpose(w), 0), 0)
-        metric = w * tf.stack([metric] * args.num_perspective, axis=3)
-        # vec = w * tf.stack([tf.stack([vec] * metric.shape[1], axis=1)] * args.num_perspective, axis=3)
-        vec = w * tf.stack([vec] * args.num_perspective, axis=3)
-        cosine = self.cosine(metric, vec)
+        w = tf.expand_dims(tf.expand_dims(w, 0), 2)
+        metric = w * tf.stack([metric] * args.num_perspective, axis=1)
+        vec = w * tf.stack([vec] * args.num_perspective, axis=1)
+
+        m = tf.matmul(metric, tf.transpose(vec, [0, 1, 3, 2]))
+        n = tf.norm(metric, axis=3, keep_dims=True) * tf.norm(vec, axis=3, keep_dims=True)
+        cosine = tf.transpose(m / n, [0, 2, 3, 1])
+
         return cosine
 
     def maxpool_full_matching(self, v1, v2, w):
-        w = tf.expand_dims(tf.expand_dims(tf.transpose(w), 0), 0)
-        v1 = w * tf.stack([v1] * args.num_perspective, axis=3)
-        v2 = w * tf.stack([v2] * args.num_perspective, axis=3)
-        cosine = self.cosine(v1, v2)
-        max_value = tf.reduce_max(cosine, axis=1)
+        cosine = self.full_matching(v1, v2, w)
+        max_value = tf.reduce_max(cosine, axis=2, keep_dims=True)
         return max_value
+
+    def cosine(self, v1, v2):
+        m = tf.matmul(v1, tf.transpose(v2, [0, 2, 1]))
+        n = tf.norm(v1, axis=2, keep_dims=True) * tf.norm(v2, axis=2, keep_dims=True)
+        cosine = m / n
+        return cosine
+
+    def dropout(self, x):
+        return tf.nn.dropout(x, self.keep_prob)
 
     def forward(self):
         # ----- Word Representation Layer -----
         # 字嵌入
-        p_embedding = tf.nn.embedding_lookup(self.embed, self.p)
-        h_embedding = tf.nn.embedding_lookup(self.embed, self.h)
-
-        p_embedding = tf.concat((p_embedding, self.p_vec), axis=1)
-        h_embedding = tf.concat((h_embedding, self.h_vec), axis=1)
-
+        p_char_embedding = tf.nn.embedding_lookup(self.embed, self.p)
+        h_char_embedding = tf.nn.embedding_lookup(self.embed, self.h)
         # 过一遍LSTM后作为字向量
         with tf.variable_scope("lstm_p", reuse=None):
-            p_output, _ = self.LSTM(p_embedding)
+            p_output, _ = self.LSTM(p_char_embedding)
         with tf.variable_scope("lstm_h", reuse=None):
-            h_output, _ = self.LSTM(h_embedding)
+            h_output, _ = self.LSTM(h_char_embedding)
+        # 字向量和词向量拼接起来
+        p_embedding = tf.concat((p_output, self.p_vec), axis=-1)
+        h_embedding = tf.concat((h_output, self.h_vec), axis=-1)
 
-        # char_p_embedding = tf.expand_dims(p_output[:, -1, :], 1)
-        # char_h_embedding = tf.expand_dims(h_output[:, -1, :], 1)
+        p_embedding = self.dropout(p_embedding)
+        h_embedding = self.dropout(h_embedding)
 
         # ----- Context Representation Layer -----
         # 论文中是取context，tf不会输出所有时刻的ctx，这里用输出值代替
         with tf.variable_scope("bilstm_p", reuse=tf.AUTO_REUSE):
-            (p_fw, p_bw), _ = self.BiLSTM(p_output)
+            (p_fw, p_bw), _ = self.BiLSTM(p_embedding)
         with tf.variable_scope("bilstm_h", reuse=tf.AUTO_REUSE):
-            (h_fw, h_bw), _ = self.BiLSTM(h_output)
+            (h_fw, h_bw), _ = self.BiLSTM(h_embedding)
 
-        p_fw = tf.nn.dropout(p_fw, args.drop_out)
-        p_bw = tf.nn.dropout(p_bw, args.drop_out)
-        h_fw = tf.nn.dropout(h_fw, args.drop_out)
-        h_bw = tf.nn.dropout(h_bw, args.drop_out)
+        p_fw = self.dropout(p_fw)
+        p_bw = self.dropout(p_bw)
+        h_fw = self.dropout(h_fw)
+        h_bw = self.dropout(h_bw)
 
         # ----- Matching Layer -----
         # 1、Full-Matching
@@ -105,53 +99,53 @@ class Graph:
         max_fw = self.maxpool_full_matching(p_fw, h_fw, self.w3)
         max_bw = self.maxpool_full_matching(p_bw, h_bw, self.w4)
 
-        # max_fw = tf.reduce_max(max_fw, axis=2)
-        # max_bw = tf.reduce_max(max_bw, axis=2)
-        # h_max_fw = tf.reduce_max(max_fw, axis=1)
-        # h_max_bw = tf.reduce_max(max_bw, axis=1)
-
         # 3、Attentive-Matching
-        att_fw = self.cosine(p_fw, h_fw)
-        att_bw = self.cosine(p_bw, h_bw)
+        # 计算权重即相似度
+        fw_cos = self.cosine(p_fw, h_fw)
+        bw_cos = self.cosine(p_bw, h_bw)
 
-        att_h_fw = h_fw * tf.expand_dims(att_fw, 2)
-        att_h_bw = h_bw * tf.expand_dims(att_bw, 2)
-        att_p_fw = p_fw * tf.expand_dims(att_fw, 2)
-        att_p_bw = p_bw * tf.expand_dims(att_bw, 2)
+        # 计算attentive vector
+        p_att_fw = tf.matmul(fw_cos, p_fw)
+        p_att_bw = tf.matmul(bw_cos, p_bw)
+        h_att_fw = tf.matmul(fw_cos, h_fw)
+        h_att_bw = tf.matmul(bw_cos, h_bw)
 
-        att_mean_h_fw = self.cosine(att_h_fw, tf.expand_dims(att_fw, axis=2))
-        att_mean_h_bw = self.cosine(att_h_bw, tf.expand_dims(att_bw, axis=2))
-        att_mean_p_fw = self.cosine(att_p_fw, tf.expand_dims(att_fw, axis=2))
-        att_mean_p_bw = self.cosine(att_p_bw, tf.expand_dims(att_bw, axis=2))
+        p_mean_fw = p_att_fw / tf.reduce_sum(fw_cos, axis=2, keep_dims=True)
+        p_mean_bw = p_att_bw / tf.reduce_sum(bw_cos, axis=2, keep_dims=True)
+        h_mean_fw = h_att_fw / tf.reduce_sum(fw_cos, axis=2, keep_dims=True)
+        h_mean_bw = h_att_bw / tf.reduce_sum(fw_cos, axis=2, keep_dims=True)
 
-        p_att_mean_fw = self.maxpool_full_matching(p_fw, tf.expand_dims(att_mean_h_fw, axis=2), self.w5)
-        p_att_mean_bw = self.maxpool_full_matching(p_bw, tf.expand_dims(att_mean_h_bw, axis=2), self.w6)
-        h_att_mean_fw = self.maxpool_full_matching(h_fw, tf.expand_dims(att_mean_p_fw, axis=2), self.w5)
-        h_att_mean_bw = self.maxpool_full_matching(h_bw, tf.expand_dims(att_mean_p_bw, axis=2), self.w6)
+        p_att_mean_fw = self.full_matching(p_fw, p_mean_fw, self.w5)
+        p_att_mean_bw = self.full_matching(p_bw, p_mean_bw, self.w6)
+        h_att_mean_fw = self.full_matching(h_fw, h_mean_fw, self.w5)
+        h_att_mean_bw = self.full_matching(h_bw, h_mean_bw, self.w6)
 
         # 4、Max-Attentive-Matching
-        att_max_h_fw = tf.reduce_max(att_h_fw, axis=2)
-        att_max_h_bw = tf.reduce_max(att_h_bw, axis=2)
-        att_max_p_fw = tf.reduce_max(att_p_fw, axis=2)
-        att_max_p_bw = tf.reduce_max(att_p_bw, axis=2)
+        p_max_fw = tf.reduce_max(p_att_fw, axis=2, keep_dims=True)
+        p_max_bw = tf.reduce_max(p_att_bw, axis=2, keep_dims=True)
+        h_max_fw = tf.reduce_max(h_att_fw, axis=2, keep_dims=True)
+        h_max_bw = tf.reduce_max(h_att_bw, axis=2, keep_dims=True)
 
-        p_att_max_fw = self.maxpool_full_matching(p_fw, tf.expand_dims(att_max_h_fw, axis=2), self.w7)
-        p_att_max_bw = self.maxpool_full_matching(p_bw, tf.expand_dims(att_max_h_bw, axis=2), self.w8)
-        h_att_max_fw = self.maxpool_full_matching(h_fw, tf.expand_dims(att_max_p_fw, axis=2), self.w7)
-        h_att_max_bw = self.maxpool_full_matching(h_bw, tf.expand_dims(att_max_p_bw, axis=2), self.w8)
+        p_att_max_fw = self.full_matching(p_fw, p_max_fw, self.w7)
+        p_att_max_bw = self.full_matching(p_bw, p_max_bw, self.w8)
+        h_att_max_fw = self.full_matching(h_fw, h_max_fw, self.w7)
+        h_att_max_bw = self.full_matching(h_bw, h_max_bw, self.w8)
 
         mv_p = tf.concat(
-            (p_full_fw, tf.expand_dims(max_fw, 1), tf.expand_dims(p_att_mean_fw, 1), tf.expand_dims(p_att_max_fw, 1),
-             p_full_bw, tf.expand_dims(max_bw, 1), tf.expand_dims(p_att_mean_bw, 1), tf.expand_dims(p_att_max_bw, 1)),
-            axis=1)
+            (p_full_fw, max_fw, p_att_mean_fw, p_att_max_fw,
+             p_full_bw, max_bw, p_att_mean_bw, p_att_max_bw),
+            axis=2)
 
         mv_h = tf.concat(
-            (h_full_fw, tf.expand_dims(max_fw, 1), tf.expand_dims(h_att_mean_fw, 1), tf.expand_dims(h_att_max_fw, 1),
-             h_full_bw, tf.expand_dims(max_bw, 1), tf.expand_dims(h_att_mean_bw, 1), tf.expand_dims(h_att_max_bw, 1)),
-            axis=1)
+            (h_full_fw, max_fw, h_att_mean_fw, h_att_max_fw,
+             h_full_bw, max_bw, h_att_mean_bw, h_att_max_bw),
+            axis=2)
 
-        mv_p = tf.nn.dropout(mv_p, args.drop_out)
-        mv_h = tf.nn.dropout(mv_h, args.drop_out)
+        mv_p = self.dropout(mv_p)
+        mv_h = self.dropout(mv_h)
+
+        mv_p = tf.reshape(mv_p, [-1, mv_p.shape[1], mv_p.shape[2] * mv_p.shape[3]])
+        mv_h = tf.reshape(mv_h, [-1, mv_h.shape[1], mv_h.shape[2] * mv_h.shape[3]])
 
         # ----- Aggregation Layer -----
         with tf.variable_scope("bilstm_agg_p", reuse=tf.AUTO_REUSE):
@@ -159,108 +153,25 @@ class Graph:
         with tf.variable_scope("bilstm_agg_h", reuse=tf.AUTO_REUSE):
             (h_f_last, h_b_last), _ = self.BiLSTM(mv_h)
 
-        # x = tf.concat(
-        #     (agg_p_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2),
-        #      agg_h_last.permute(1, 0, 2).contiguous().view(-1, args.agg_hidden_size * 2)), axis=1)
-        x = tf.concat((p_f_last, p_b_last, h_f_last, h_b_last), axis=1)
-        x = tf.reshape(x, shape=[args.batch_size, -1])
-        x = tf.nn.dropout(x, args.drop_out)
+        x = tf.concat((p_f_last, p_b_last, h_f_last, h_b_last), axis=2)
+        x = tf.reshape(x, shape=[-1, x.shape[1] * x.shape[2]])
+        x = self.dropout(x)
 
         # ----- Prediction Layer -----
-        x = tf.layers.dense(x, 4096, activation='relu')
-        x = tf.nn.dropout(x, args.drop_out)
-        x = tf.layers.dense(x, 1024, activation='relu')
-        x = tf.nn.dropout(x, args.drop_out)
-        x = tf.layers.dense(x, 128)
-        self.logits = tf.layers.dense(x, args.class_size)
-        # x = tf.nn.sigmoid(x)
-        # self.logits = tf.nn.sigmoid(x)
-        # self.predict = tf.argmax(self.logits, axis=1, name="predictions")
+        x = tf.layers.dense(x, 4096)
+        x = self.dropout(x)
+        x = tf.layers.dense(x, 2048)
+        x = self.dropout(x)
+        self.logits = tf.layers.dense(x, 1692)
 
     def train(self):
-        y = tf.one_hot(self.y, args.class_size)
-        # result = [i[1] for i in self.logits]
+        y = tf.one_hot(self.y, args.char_vocab_len)
         loss = tf.nn.softmax_cross_entropy_with_logits(labels=y, logits=self.logits)
-        # self.loss = -tf.reduce_mean(self.y * tf.log(self.logits))
         self.loss = tf.reduce_sum(loss)
-        self.train_op = tf.train.AdamOptimizer().minimize(self.loss)
+        self.train_op = tf.train.AdamOptimizer(args.learning_rate).minimize(self.loss)
         self.predict = tf.argmax(self.logits, axis=1, name="predictions")
         correct_prediction = tf.equal(tf.cast(self.predict, tf.int32), self.y)
         self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32), name="Accuracy")
-
-
-def train():
-    p, h, p_vec, h_vec, y = load_data.load_data('input/train.csv')
-    p_vec = np.array(p_vec)
-    h_vec = np.array(h_vec)
-
-    p_placeholder = tf.placeholder(p.dtype, p.shape)
-    h_placeholder = tf.placeholder(h.dtype, h.shape)
-    p_vec_placeholder = tf.placeholder(p_vec.dtype, p_vec.shape)
-    h_vec_placeholder = tf.placeholder(h_vec.dtype, h_vec.shape)
-    y_placeholder = tf.placeholder(y.dtype, y.shape)
-
-    evl_p, evl_h, evl_p_vec, evl_h_vec, evl_y = load_data.load_data('input/dev.csv')
-    # dataset = tf.data.Dataset.from_tensor_slices((p, h, p_vec, h_vec, y))
-    dataset = tf.data.Dataset.from_tensor_slices((p_placeholder,
-                                                  h_placeholder,
-                                                  p_vec_placeholder,
-                                                  h_vec_placeholder,
-                                                  y_placeholder))
-    dataset = dataset.shuffle(10000).batch(args.batch_size).repeat(20)
-    # iterator = dataset.make_one_shot_iterator()
-    iterator = dataset.make_initializable_iterator()
-    # data_element =
-
-    model = Graph()
-    with tf.Session()as sess:
-        sess.run(tf.global_variables_initializer())
-        # tf.summary.FileWriter('log/', sess.graph)
-        for i in range(20):
-            batch = int(len(y) / args.batch_size)
-            for j in range(batch):
-                try:
-                    sess.run(iterator.initializer, feed_dict={
-                        p_placeholder: p,
-                        h_placeholder: h,
-                        p_vec_placeholder: p_vec,
-                        h_vec_placeholder: h_vec,
-                        y_placeholder: y
-                    })
-                    batch_p, batch_h, batch_p_vec, batch_h_vec, batch_y = sess.run(iterator.get_next())
-
-                    loss, _, predict, acc = sess.run([model.loss, model.train_op, model.predict, model.accuracy],
-                                                     feed_dict={model.p: batch_p,
-                                                                model.h: batch_h,
-                                                                model.p_vec: batch_p_vec,
-                                                                model.h_vec: batch_h_vec,
-                                                                model.y: batch_y})
-                    print('epoch:', i, ' batch:', j, ' loss:', loss / args.batch_size, ' acc:', acc)
-                except:
-                    # print(e)
-                    print('data done')
-
-            accs = []
-            for j in range(int(len(evl_y) / args.batch_size)):
-                batch_p = evl_p[args.batch_size * j:args.batch_size * (j + 1)]
-                batch_h = evl_h[args.batch_size * j:args.batch_size * (j + 1)]
-                batch_p_vec = p_vec[args.batch_size * j:args.batch_size * (j + 1)]
-                batch_h_vec = h_vec[args.batch_size * j:args.batch_size * (j + 1)]
-                batch_y = evl_y[args.batch_size * j:args.batch_size * (j + 1)]
-                predict, acc = sess.run([model.predict, model.accuracy],
-                                        feed_dict={model.p: batch_p,
-                                                   model.h: batch_h,
-                                                   model.p_vec: batch_p_vec,
-                                                   model.h_vec: batch_h_vec,
-                                                   model.y: batch_y})
-                accs.append(acc)
-
-            acc = np.mean(accs)
-            print('evl acc: ', acc)
-            print('save model')
-            saver = tf.train.Saver()
-            saver.save(sess, f'output/BiMPM_{i}.ckpt')
-            print('')
 
 
 def test(path):
@@ -268,7 +179,7 @@ def test(path):
     with tf.Session() as sess:
         saver = tf.train.Saver()
         saver.restore(sess, f'./output/{path}')
-        p, h, y = load_data.load_data('input/test.csv')
+        p, h, y = data_process.load_data('input/test_ccb.csv')
         accs = []
         for j in range(int(len(y) / args.batch_size)):
             batch_p = p[args.batch_size * j:args.batch_size * (j + 1)]
@@ -281,7 +192,6 @@ def test(path):
         acc = np.mean(accs)
         print('acc: ', acc)
 
-
-if __name__ == '__main__':
-    train()
-    # test()
+# if __name__ == '__main__':
+#     train()
+# test()
