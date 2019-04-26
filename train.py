@@ -19,21 +19,26 @@ label_holder = tf.placeholder(name='label', shape=(None,), dtype=tf.int32)
 dataset = tf.data.Dataset.from_tensor_slices((p_index_holder, h_index_holder, p_vec_holder, h_vec_holder, label_holder))
 dataset = dataset.batch(args.batch_size).repeat(args.epochs)
 iterator = dataset.make_initializable_iterator()
+next_element = iterator.get_next()
 model = Graph()
 saver = tf.train.Saver()
-with tf.Session()as sess:
+
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+config.gpu_options.per_process_gpu_memory_fraction = 0.8
+
+with tf.Session(config=config)as sess:
     sess.run(tf.global_variables_initializer())
     sess.run(iterator.initializer, feed_dict={p_index_holder: p_index,
                                               h_index_holder: h_index,
                                               p_vec_holder: p_vec,
                                               h_vec_holder: h_vec,
                                               label_holder: label})
+    steps = int(len(label) / args.batch_size)
     for epoch in range(args.epochs):
-        step = 0
-        while True:
-            step += 1
+        for step in range(steps):
             try:
-                p_index_batch, h_index_batch, p_vec_batch, h_vec_batch, label_batch = sess.run(iterator.get_next())
+                p_index_batch, h_index_batch, p_vec_batch, h_vec_batch, label_batch = sess.run(next_element)
                 loss, _, predict, acc = sess.run([model.loss, model.train_op, model.predict, model.accuracy],
                                                  feed_dict={model.p: p_index_batch,
                                                             model.h: h_index_batch,
@@ -44,7 +49,6 @@ with tf.Session()as sess:
                 print('epoch:', epoch, ' step:', step, ' loss:', loss / args.batch_size, ' acc:', acc)
             except tf.errors.OutOfRangeError:
                 print('\n')
-                break
 
         predict, acc = sess.run([model.predict, model.accuracy],
                                 feed_dict={model.p: p_index_dev,
