@@ -1,8 +1,10 @@
-import data_process
 from BiMPM import Graph
 import tensorflow as tf
 import args
 from data_process import load_data
+import os
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '0, 1'
 
 p_index, h_index, p_vec, h_vec, label = load_data('input/train.csv')
 p_index_dev, h_index_dev, p_vec_dev, h_vec_dev, label_dev = load_data('input/dev.csv')
@@ -16,10 +18,9 @@ label_holder = tf.placeholder(name='label', shape=(None,), dtype=tf.int32)
 
 dataset = tf.data.Dataset.from_tensor_slices((p_index_holder, h_index_holder, p_vec_holder, h_vec_holder, label_holder))
 dataset = dataset.batch(args.batch_size).repeat(args.epochs)
-
 iterator = dataset.make_initializable_iterator()
-element = iterator.get_next()
 model = Graph()
+saver = tf.train.Saver()
 with tf.Session()as sess:
     sess.run(tf.global_variables_initializer())
     sess.run(iterator.initializer, feed_dict={p_index_holder: p_index,
@@ -32,7 +33,7 @@ with tf.Session()as sess:
         while True:
             step += 1
             try:
-                p_index_batch, h_index_batch, p_vec_batch, h_vec_batch, label_batch = sess.run(element)
+                p_index_batch, h_index_batch, p_vec_batch, h_vec_batch, label_batch = sess.run(iterator.get_next())
                 loss, _, predict, acc = sess.run([model.loss, model.train_op, model.predict, model.accuracy],
                                                  feed_dict={model.p: p_index_batch,
                                                             model.h: h_index_batch,
@@ -41,9 +42,8 @@ with tf.Session()as sess:
                                                             model.y: label_batch,
                                                             model.keep_prob: args.keep_prob})
                 print('epoch:', epoch, ' step:', step, ' loss:', loss / args.batch_size, ' acc:', acc)
-            except Exception as e:
-                print(e)
-                print('done')
+            except tf.errors.OutOfRangeError:
+                print('\n')
                 break
 
         predict, acc = sess.run([model.predict, model.accuracy],
@@ -51,9 +51,12 @@ with tf.Session()as sess:
                                            model.h: h_index_dev,
                                            model.p_vec: p_vec_dev,
                                            model.h_vec: h_vec_dev,
-                                           model.y: label_dev})
+                                           model.y: label_dev,
+                                           model.keep_prob: 1})
         print('epoch:', epoch, ' dev acc:', acc)
-
+        saver.save(sess, f'output/BiMPM_{epoch}.ckpt')
+        print('save model done')
+        print('\n')
 
     # p, h, p_vec, h_vec, y = data_process.load_data('input/train.csv')
     # # evl_p, evl_h, evl_p_vec, evl_h_vec, evl_y = load_data.load_data('input/dev.csv')

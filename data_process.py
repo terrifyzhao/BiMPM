@@ -72,21 +72,6 @@ def load_data(file):
     return p_index, h_index, p_vec, h_vec, label
 
 
-def batch_data(file, batch_size):
-    p_index, h_index, p_vec, h_vec, label = load_data(file)
-    p_index_holder = tf.placeholder(dtype=tf.int32, shape=[None, args.max_char_len], name='p_index')
-    h_index_holder = tf.placeholder(dtype=tf.int32, shape=[None, args.max_char_len], name='h_index')
-    p_vec_holder = tf.placeholder(dtype=tf.float32, shape=[None, args.max_word_len, args.char_embedding_len],
-                                  name='p_vec')
-    h_vec_holder = tf.placeholder(dtype=tf.float32, shape=[None, args.max_word_len, args.char_embedding_len],
-                                  name='h_vec')
-    dataset = tf.data.Dataset.from_tensor_slices([p_index_holder, h_index_holder, p_vec_holder, h_vec_holder])
-    dataset.batch(batch_size).repeat(args.epochs)
-
-    iterator = dataset.make_initializable_iterator()
-    element = iterator.get_next()
-
-
 def load_fake_data():
     p, h, label = [], [], []
     for i in range(10):
