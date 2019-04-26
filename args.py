@@ -1,12 +1,10 @@
-char_vocab_size = 1000
-word_vocab_size = 1000
 char_embedding_len = 100
 word_embedding_len = 100
 char_hidden_size = 512
 context_hidden_size = 1024
 agg_hidden_size = 128
 
-num_perspective = 10
+num_perspective = 12
 class_size = 2
 
 max_char_len = 15
@@ -16,7 +14,7 @@ batch_size = 256
 
 char_vocab_len = 1692
 
-learning_rate = 0.0002
+learning_rate = 0.0005
 
 keep_prob = 0.7
 

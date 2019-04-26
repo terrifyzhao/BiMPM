@@ -6,7 +6,7 @@ import os
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0, 1'
 
-p_index, h_index, p_vec, h_vec, label = load_data('input/train.csv')
+p_index, h_index, p_vec, h_vec, label = load_data('input/dev.csv')
 p_index_dev, h_index_dev, p_vec_dev, h_vec_dev, label_dev = load_data('input/dev.csv')
 p_index_holder = tf.placeholder(name='p_index', shape=(None, args.max_char_len), dtype=tf.int32)
 h_index_holder = tf.placeholder(name='h_index', shape=(None, args.max_char_len), dtype=tf.int32)

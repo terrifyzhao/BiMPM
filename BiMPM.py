@@ -158,14 +158,16 @@ class Graph:
         x = self.dropout(x)
 
         # ----- Prediction Layer -----
-        x = tf.layers.dense(x, 4096)
+        x = tf.layers.dense(x, 20000, activation='relu')
         x = self.dropout(x)
-        x = tf.layers.dense(x, 2048)
+        x = tf.layers.dense(x, 10000, activation='relu')
         x = self.dropout(x)
-        self.logits = tf.layers.dense(x, 1692)
+        x = tf.layers.dense(x, 512, activation='relu')
+        x = self.dropout(x)
+        self.logits = tf.layers.dense(x, args.class_size)
 
     def train(self):
-        y = tf.one_hot(self.y, args.char_vocab_len)
+        y = tf.one_hot(self.y, args.class_size)
         loss = tf.nn.softmax_cross_entropy_with_logits(labels=y, logits=self.logits)
         self.loss = tf.reduce_sum(loss)
         self.train_op = tf.train.AdamOptimizer(args.learning_rate).minimize(self.loss)
