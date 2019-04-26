@@ -12,7 +12,7 @@ class_size = 2
 max_char_len = 15
 max_word_len = 15
 
-batch_size = 128
+batch_size = 256
 
 char_vocab_len = 1692
 
