@@ -1,7 +1,9 @@
 import tensorflow as tf
 import args
 import data_process
+import os
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 class Graph:
     def __init__(self):

@@ -2,9 +2,6 @@ from BiMPM import Graph
 import tensorflow as tf
 import args
 from data_process import load_data
-import os
-
-os.environ['CUDA_VISIBLE_DEVICES'] = '0, 1'
 
 p_index, h_index, p_vec, h_vec, label = load_data('input/dev.csv')
 p_index_dev, h_index_dev, p_vec_dev, h_vec_dev, label_dev = load_data('input/dev.csv')
