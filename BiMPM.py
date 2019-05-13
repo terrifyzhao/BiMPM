@@ -171,7 +171,7 @@ class Graph:
     def train(self):
         y = tf.one_hot(self.y, args.class_size)
         loss = tf.nn.softmax_cross_entropy_with_logits(labels=y, logits=self.logits)
-        self.loss = tf.reduce_sum(loss)
+        self.loss = tf.reduce_mean(loss)
         self.train_op = tf.train.AdamOptimizer(args.learning_rate).minimize(self.loss)
         self.predict = tf.argmax(self.logits, axis=1, name="predictions")
         correct_prediction = tf.equal(tf.cast(self.predict, tf.int32), self.y)
